@@ -256,6 +256,41 @@ function migrateProviderSettings() {
 
 migrateProviderSettings();
 
+// Normalize DeepInfra's model to turbo. Measurements showed BOTH DeepInfra
+// Whisper instances degrade independently and unpredictably: turbo suffers
+// occasional cold starts (~10s + empty {"text":""}), while large-v3 sometimes
+// overloads entirely (40-60s timeouts). turbo is the faster median (~1s) and
+// stays warm under our keep-warm ping, with large-v3 kept only as an automatic
+// empty-response fallback. An earlier build briefly defaulted to large-v3, so
+// this also resets anyone left on it back to turbo.
+function normalizeDeepInfraModel() {
+  if (!isBrowser) return;
+  if (localStorage.getItem("_deepinfraModelNormalized") === "1") return;
+  const TURBO = "openai/whisper-large-v3-turbo";
+  const LARGE = "openai/whisper-large-v3";
+  for (const key of [
+    "cloudTranscriptionModel",
+    "meetingCloudTranscriptionModel",
+    "uploadCloudTranscriptionModel",
+  ]) {
+    if (localStorage.getItem(key) === LARGE) {
+      // Only remap when DeepInfra is the active provider for that context.
+      const providerKey =
+        key === "cloudTranscriptionModel"
+          ? "cloudTranscriptionProvider"
+          : key === "meetingCloudTranscriptionModel"
+            ? "meetingCloudTranscriptionProvider"
+            : "uploadCloudTranscriptionProvider";
+      if (localStorage.getItem(providerKey) === "deepinfra") {
+        localStorage.setItem(key, TURBO);
+      }
+    }
+  }
+  localStorage.setItem("_deepinfraModelNormalized", "1");
+}
+
+normalizeDeepInfraModel();
+
 // One-time seed of the dedicated audio-upload transcription settings. Runs
 // after migrateProviderSettings() so the `transcriptionMode` it derives and
 // persists is available to copy. Before this context existed the upload page
@@ -564,8 +599,10 @@ export interface SettingsState
   setAnthropicApiKey: (key: string) => void;
   setGeminiApiKey: (key: string) => void;
   setGroqApiKey: (key: string) => void;
+  setDeepInfraApiKey: (key: string) => void;
   setXaiApiKey: (key: string) => void;
   setMistralApiKey: (key: string) => void;
+  setOpenRouterApiKey: (key: string) => void;
   setCortiClientId: (key: string) => void;
   setCortiClientSecret: (key: string) => void;
   setCustomTranscriptionApiKey: (key: string) => void;
@@ -755,8 +792,10 @@ const SECRET_IPC_SAVERS = {
   anthropic: "saveAnthropicKey",
   gemini: "saveGeminiKey",
   groq: "saveGroqKey",
+  deepInfra: "saveDeepInfraKey",
   xai: "saveXaiKey",
   mistral: "saveMistralKey",
+  openRouter: "saveOpenRouterKey",
   cortiClientId: "saveCortiClientId",
   cortiClientSecret: "saveCortiClientSecret",
   customTranscription: "saveCustomTranscriptionKey",
@@ -795,8 +834,10 @@ const STALE_SECRET_LOCALSTORAGE_KEYS = [
   "anthropicApiKey",
   "geminiApiKey",
   "groqApiKey",
+  "deepInfraApiKey",
   "xaiApiKey",
   "mistralApiKey",
+  "openRouterApiKey",
   "cortiClientId",
   "cortiClientSecret",
   "customTranscriptionApiKey",
@@ -875,8 +916,10 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
   anthropicApiKey: "",
   geminiApiKey: "",
   groqApiKey: "",
+  deepInfraApiKey: "",
   xaiApiKey: "",
   mistralApiKey: "",
+  openRouterApiKey: "",
   cortiClientId: "",
   cortiClientSecret: "",
   customTranscriptionApiKey: "",
@@ -1277,6 +1320,11 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
     debouncedSaveSecret("groq", key);
     invalidateApiKeyCaches("groq");
   },
+  setDeepInfraApiKey: (key: string) => {
+    set({ deepInfraApiKey: key });
+    debouncedSaveSecret("deepInfra", key);
+    invalidateApiKeyCaches();
+  },
   setXaiApiKey: (key: string) => {
     set({ xaiApiKey: key });
     debouncedSaveSecret("xai", key);
@@ -1286,6 +1334,11 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
     set({ mistralApiKey: key });
     debouncedSaveSecret("mistral", key);
     invalidateApiKeyCaches("mistral");
+  },
+  setOpenRouterApiKey: (key: string) => {
+    set({ openRouterApiKey: key });
+    debouncedSaveSecret("openRouter", key);
+    invalidateApiKeyCaches();
   },
   setCortiClientId: (key: string) => {
     set({ cortiClientId: key });
@@ -1683,8 +1736,10 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
     if (keys.anthropicApiKey !== undefined) s.setAnthropicApiKey(keys.anthropicApiKey);
     if (keys.geminiApiKey !== undefined) s.setGeminiApiKey(keys.geminiApiKey);
     if (keys.groqApiKey !== undefined) s.setGroqApiKey(keys.groqApiKey);
+    if (keys.deepInfraApiKey !== undefined) s.setDeepInfraApiKey(keys.deepInfraApiKey);
     if (keys.xaiApiKey !== undefined) s.setXaiApiKey(keys.xaiApiKey);
     if (keys.mistralApiKey !== undefined) s.setMistralApiKey(keys.mistralApiKey);
+    if (keys.openRouterApiKey !== undefined) s.setOpenRouterApiKey(keys.openRouterApiKey);
     if (keys.cortiClientId !== undefined) s.setCortiClientId(keys.cortiClientId);
     if (keys.cortiClientSecret !== undefined) s.setCortiClientSecret(keys.cortiClientSecret);
     if (keys.customTranscriptionApiKey !== undefined)
@@ -1931,8 +1986,10 @@ export async function initializeSettings(): Promise<void> {
         anthropic,
         gemini,
         groq,
+        deepinfra,
         xai,
         mistral,
+        openrouter,
         cortiClientId,
         cortiClientSecret,
         customTx,
@@ -1947,8 +2004,10 @@ export async function initializeSettings(): Promise<void> {
         window.electronAPI.getAnthropicKey?.(),
         window.electronAPI.getGeminiKey?.(),
         window.electronAPI.getGroqKey?.(),
+        window.electronAPI.getDeepInfraKey?.(),
         window.electronAPI.getXaiKey?.(),
         window.electronAPI.getMistralKey?.(),
+        window.electronAPI.getOpenRouterKey?.(),
         window.electronAPI.getCortiClientId?.(),
         window.electronAPI.getCortiClientSecret?.(),
         window.electronAPI.getCustomTranscriptionKey?.(),
@@ -1965,8 +2024,10 @@ export async function initializeSettings(): Promise<void> {
         anthropicApiKey: anthropic || "",
         geminiApiKey: gemini || "",
         groqApiKey: groq || "",
+        deepInfraApiKey: deepinfra || "",
         xaiApiKey: xai || "",
         mistralApiKey: mistral || "",
+        openRouterApiKey: openrouter || "",
         cortiClientId: cortiClientId || "",
         cortiClientSecret: cortiClientSecret || "",
         customTranscriptionApiKey: customTx || "",

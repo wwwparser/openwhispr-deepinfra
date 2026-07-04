@@ -108,7 +108,7 @@ function isWavFormat(buffer) {
 }
 
 function convertToWav(inputPath, outputPath, options = {}) {
-  const { sampleRate = 16000, channels = 1 } = options;
+  const { sampleRate = 16000, channels = 1, audioFilter = null } = options;
 
   return new Promise((resolve, reject) => {
     const ffmpegPath = getFFmpegPath();
@@ -124,6 +124,7 @@ function convertToWav(inputPath, outputPath, options = {}) {
       String(sampleRate),
       "-ac",
       String(channels),
+      ...(audioFilter ? ["-af", audioFilter] : []),
       "-c:a",
       "pcm_s16le",
       "-y", // Overwrite output file

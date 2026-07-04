@@ -83,8 +83,15 @@ export default function UploadAudioView({ onNoteCreated, onOpenSettings }: Uploa
   const usage = useUsage();
   const isProUser = usage?.isSubscribed || usage?.isTrial;
 
-  const { openaiApiKey, groqApiKey, xaiApiKey, mistralApiKey, customTranscriptionApiKey } =
-    useSettings();
+  const {
+    openaiApiKey,
+    groqApiKey,
+    deepInfraApiKey,
+    xaiApiKey,
+    mistralApiKey,
+    openRouterApiKey,
+    customTranscriptionApiKey,
+  } = useSettings();
 
   const {
     useLocalWhisper,
@@ -182,11 +189,15 @@ export default function UploadAudioView({ onNoteCreated, onOpenSettings }: Uploa
               ? openaiApiKey
               : cloudTranscriptionProvider === "groq"
                 ? groqApiKey
-                : cloudTranscriptionProvider === "xai"
-                  ? xaiApiKey
-                  : cloudTranscriptionProvider === "mistral"
-                    ? mistralApiKey
-                    : customTranscriptionApiKey;
+                : cloudTranscriptionProvider === "deepinfra"
+                  ? deepInfraApiKey
+                  : cloudTranscriptionProvider === "xai"
+                    ? xaiApiKey
+                    : cloudTranscriptionProvider === "mistral"
+                      ? mistralApiKey
+                      : cloudTranscriptionProvider === "openrouter"
+                        ? openRouterApiKey
+                        : customTranscriptionApiKey;
           if (!cancelled) setProviderReady(!!key);
         }
         return;
@@ -217,8 +228,10 @@ export default function UploadAudioView({ onNoteCreated, onOpenSettings }: Uploa
     cloudTranscriptionBaseUrl,
     openaiApiKey,
     groqApiKey,
+    deepInfraApiKey,
     xaiApiKey,
     mistralApiKey,
+    openRouterApiKey,
     customTranscriptionApiKey,
     cortiClientId,
     cortiClientSecret,
@@ -244,10 +257,14 @@ export default function UploadAudioView({ onNoteCreated, onOpenSettings }: Uploa
         return openaiApiKey;
       case "groq":
         return groqApiKey;
+      case "deepinfra":
+        return deepInfraApiKey;
       case "xai":
         return xaiApiKey;
       case "mistral":
         return mistralApiKey;
+      case "openrouter":
+        return openRouterApiKey;
       case "custom":
         return customTranscriptionApiKey || "";
       default:

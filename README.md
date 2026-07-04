@@ -1,3 +1,14 @@
+<!--
+  Форк OpenWhispr с провайдером транскрибации DeepInfra и доработками надёжности.
+  Оригинал: https://github.com/OpenWhispr/openwhispr (MIT, © OpenWhispr Team).
+  Список изменений этого форка: см. IMPROVEMENTS.md
+-->
+> **🔧 Форк.** Это доработанная версия [OpenWhispr](https://github.com/OpenWhispr/openwhispr):
+> добавлен провайдер транскрибации **DeepInfra** (Whisper large-v3 / turbo) и повышена
+> надёжность распознавания на тихом микрофоне (конвертация в WAV + speechnorm, авто-откат
+> модели, keep-warm, прокси). Полный список — в [IMPROVEMENTS.md](IMPROVEMENTS.md).
+> Лицензия и авторство оригинала сохранены (MIT, © OpenWhispr Team).
+
 <p align="center">
   <img src="src/assets/logo.svg" alt="OpenWhispr" width="120" />
 </p>

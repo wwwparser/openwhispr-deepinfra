@@ -11,8 +11,10 @@ const SECRET_KEYS = [
   "ANTHROPIC_API_KEY",
   "GEMINI_API_KEY",
   "GROQ_API_KEY",
+  "DEEPINFRA_API_KEY",
   "XAI_API_KEY",
   "MISTRAL_API_KEY",
+  "OPENROUTER_API_KEY",
   "ASSEMBLYAI_API_KEY",
   "DEEPGRAM_API_KEY",
   "CORTI_CLIENT_ID",
@@ -297,6 +299,14 @@ class EnvironmentManager {
     return this._saveKey("GROQ_API_KEY", key);
   }
 
+  getDeepInfraKey() {
+    return this._getKey("DEEPINFRA_API_KEY");
+  }
+
+  saveDeepInfraKey(key) {
+    return this._saveKey("DEEPINFRA_API_KEY", key);
+  }
+
   getXaiKey() {
     return this._getKey("XAI_API_KEY");
   }
@@ -311,6 +321,14 @@ class EnvironmentManager {
 
   saveMistralKey(key) {
     return this._saveKey("MISTRAL_API_KEY", key);
+  }
+
+  getOpenRouterKey() {
+    return this._getKey("OPENROUTER_API_KEY");
+  }
+
+  saveOpenRouterKey(key) {
+    return this._saveKey("OPENROUTER_API_KEY", key);
   }
 
   getAssemblyAIKey() {

@@ -75,8 +75,11 @@ export const API_ENDPOINTS = {
   ANTHROPIC: "https://api.anthropic.com/v1/messages",
   GEMINI: "https://generativelanguage.googleapis.com/v1beta",
   GROQ_BASE: "https://api.groq.com/openai/v1",
+  DEEPINFRA_BASE: "https://api.deepinfra.com/v1/openai",
   XAI_BASE: "https://api.x.ai/v1",
   MISTRAL_BASE: "https://api.mistral.ai/v1",
+  OPENROUTER_BASE: "https://openrouter.ai/api/v1",
+  OPENROUTER_CHAT: "https://openrouter.ai/api/v1/chat/completions",
   TRANSCRIPTION_BASE: DEFAULT_TRANSCRIPTION_BASE,
   TRANSCRIPTION: buildApiUrl(DEFAULT_TRANSCRIPTION_BASE, "/audio/transcriptions"),
 } as const;

@@ -180,6 +180,25 @@
       ]
     },
     {
+      "id": "deepinfra",
+      "name": "DeepInfra",
+      "baseUrl": "https://api.deepinfra.com/v1/openai",
+      "models": [
+        {
+          "id": "openai/whisper-large-v3-turbo",
+          "name": "Whisper Large v3 Turbo",
+          "description": "Fast, low-cost speech recognition (kept warm)",
+          "descriptionKey": "models.descriptions.transcription.deepinfra_whisper_large_v3_turbo"
+        },
+        {
+          "id": "openai/whisper-large-v3",
+          "name": "Whisper Large v3",
+          "description": "Higher accuracy; used as automatic fallback",
+          "descriptionKey": "models.descriptions.transcription.deepinfra_whisper_large_v3"
+        }
+      ]
+    },
+    {
       "id": "xai",
       "name": "xAI",
       "baseUrl": "https://api.x.ai/v1",
@@ -216,6 +235,43 @@
           "description": "Clinical-grade medical transcription",
           "descriptionKey": "models.descriptions.transcription.corti_transcribe",
           "streaming": true
+        }
+      ]
+    },
+    {
+      "id": "openrouter",
+      "name": "OpenRouter",
+      "baseUrl": "https://openrouter.ai/api/v1",
+      "models": [
+        {
+          "id": "openai/whisper-large-v3-turbo",
+          "name": "Whisper Large v3 Turbo",
+          "description": "Fast, cheap speech recognition (~$0.0001/min)",
+          "descriptionKey": "models.descriptions.transcription.openrouter_whisper_large_v3_turbo"
+        },
+        {
+          "id": "openai/whisper-large-v3",
+          "name": "Whisper Large v3",
+          "description": "High accuracy speech recognition (~$0.0015/min)",
+          "descriptionKey": "models.descriptions.transcription.openrouter_whisper_large_v3"
+        },
+        {
+          "id": "google/gemini-2.5-flash",
+          "name": "Gemini 2.5 Flash",
+          "description": "Multimodal model, transcribes via chat (token-priced)",
+          "descriptionKey": "models.descriptions.transcription.openrouter_gemini_2_5_flash"
+        },
+        {
+          "id": "google/gemini-2.5-pro",
+          "name": "Gemini 2.5 Pro",
+          "description": "High-accuracy multimodal model via chat (token-priced)",
+          "descriptionKey": "models.descriptions.transcription.openrouter_gemini_2_5_pro"
+        },
+        {
+          "id": "openai/gpt-4o-audio-preview",
+          "name": "GPT-4o Audio",
+          "description": "OpenAI GPT-4o audio model via chat (token-priced)",
+          "descriptionKey": "models.descriptions.transcription.openrouter_gpt_4o_audio"
         }
       ]
     }

@@ -104,6 +104,7 @@ function resolveReasoningRoute(text, settings, agentName, voiceAgentRequested) {
 const PLACEHOLDER_KEYS = {
   openai: "your_openai_api_key_here",
   groq: "your_groq_api_key_here",
+  deepinfra: "your_deepinfra_api_key_here",
   xai: "your_xai_api_key_here",
   mistral: "your_mistral_api_key_here",
 };
@@ -220,6 +221,109 @@ class AudioManager {
     this.lastAudioBlob = null;
     this.lastAudioMetadata = null;
     this._localSpeechGateState = null;
+    this._keepWarmTimer = null;
+    this._keepWarmKickoff = null;
+    this._startKeepWarm();
+  }
+
+  // --- DeepInfra keep-warm -------------------------------------------------
+  // DeepInfra unloads an idle Whisper model after a few minutes; the next call
+  // then pays a ~10s cold start (turbo also returns an empty {"text":""} while
+  // cold). A tiny silent clip sent every couple of minutes keeps the model
+  // resident so real dictations stay at ~1s. Best-effort: any failure is
+  // swallowed. Only runs while DeepInfra is the active cloud provider.
+  _tinyWavBlob() {
+    const sampleRate = 16000;
+    const n = Math.floor(sampleRate * 0.3); // 0.3s of silence
+    const buf = new ArrayBuffer(44 + n * 2);
+    const dv = new DataView(buf);
+    const w = (o, str) => {
+      for (let i = 0; i < str.length; i++) dv.setUint8(o + i, str.charCodeAt(i));
+    };
+    w(0, "RIFF");
+    dv.setUint32(4, 36 + n * 2, true);
+    w(8, "WAVE");
+    w(12, "fmt ");
+    dv.setUint32(16, 16, true);
+    dv.setUint16(20, 1, true); // PCM
+    dv.setUint16(22, 1, true); // mono
+    dv.setUint32(24, sampleRate, true);
+    dv.setUint32(28, sampleRate * 2, true);
+    dv.setUint16(32, 2, true);
+    dv.setUint16(34, 16, true);
+    w(36, "data");
+    dv.setUint32(40, n * 2, true);
+    // Samples left as zero => silence; that's all we need to keep the model hot.
+    return new Blob([buf], { type: "audio/wav" });
+  }
+
+  async _pingKeepWarm() {
+    try {
+      if (typeof window === "undefined") return;
+      const s = getSettings();
+      if ((s.cloudTranscriptionProvider || "") !== "deepinfra") return;
+      if (s.useLocalWhisper) return;
+      // Don't compete with a real transcription that's in flight.
+      if (this.isRecording || this.isProcessing) return;
+      const apiKey = await (window.electronAPI?.getDeepInfraKey?.() ?? null);
+      if (!apiKey) return;
+      const model = this.getTranscriptionModel();
+      if (!model || !model.includes("/")) return;
+      const endpoint = "https://api.deepinfra.com/v1/openai/audio/transcriptions";
+      const fd = new FormData();
+      fd.append("file", this._tinyWavBlob(), "warm.wav");
+      fd.append("model", model);
+      const controller = new AbortController();
+      const abortTimer = setTimeout(() => controller.abort(), 8000);
+      await fetch(endpoint, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${apiKey}` },
+        body: fd,
+        signal: controller.signal,
+      }).catch(() => {});
+      clearTimeout(abortTimer);
+      logger.debug?.("DeepInfra keep-warm ping sent", { model }, "transcription");
+    } catch (_e) {
+      // keep-warm is strictly best-effort
+    }
+  }
+
+  // Transcode a browser-recorded audio blob (WebM/Opus, etc.) into a clean
+  // 16 kHz mono WAV using the bundled FFmpeg in the main process. A hand-rolled
+  // WebAudio encoder proved unreliable (DeepInfra's turbo returned empty on its
+  // output), whereas FFmpeg's WAV is decoded fast and correctly every time.
+  // Returns null if conversion is unavailable so the caller falls back to the
+  // original blob.
+  async _webmToWavBlob(blob) {
+    try {
+      if (!window.electronAPI?.convertAudioToWav) return null;
+      const arrayBuf = await blob.arrayBuffer();
+      const wavBuf = await window.electronAPI.convertAudioToWav(arrayBuf);
+      if (!wavBuf || wavBuf.byteLength <= 44) return null;
+      return new Blob([wavBuf], { type: "audio/wav" });
+    } catch (_e) {
+      return null;
+    }
+  }
+
+  _startKeepWarm() {
+    if (typeof window === "undefined") return;
+    if (this._keepWarmTimer) return;
+    const INTERVAL_MS = 120000; // 2 min — turbo cools within a few idle minutes
+    // Warm the model shortly after launch, before the first dictation.
+    this._keepWarmKickoff = setTimeout(() => this._pingKeepWarm(), 5000);
+    this._keepWarmTimer = setInterval(() => this._pingKeepWarm(), INTERVAL_MS);
+  }
+
+  _stopKeepWarm() {
+    if (this._keepWarmTimer) {
+      clearInterval(this._keepWarmTimer);
+      this._keepWarmTimer = null;
+    }
+    if (this._keepWarmKickoff) {
+      clearTimeout(this._keepWarmKickoff);
+      this._keepWarmKickoff = null;
+    }
   }
 
   getWorkletBlobUrl() {
@@ -1073,6 +1177,19 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
         err.code = "API_KEY_MISSING";
         throw err;
       }
+    } else if (provider === "deepinfra") {
+      // Prefer store value (user-entered via UI) over main process (.env)
+      apiKey = s.deepInfraApiKey;
+      if (!isValidApiKey(apiKey, "deepinfra")) {
+        apiKey = await window.electronAPI.getDeepInfraKey?.();
+      }
+      if (!isValidApiKey(apiKey, "deepinfra")) {
+        const err = new Error(
+          "DeepInfra API key not found. Please set your API key in the Control Panel."
+        );
+        err.code = "API_KEY_MISSING";
+        throw err;
+      }
     } else if (provider === "xai") {
       apiKey = s.xaiApiKey;
       if (!isValidApiKey(apiKey, "xai")) {
@@ -1081,6 +1198,18 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
       if (!isValidApiKey(apiKey, "xai")) {
         const err = new Error(
           "xAI API key not found. Please set your API key in the Control Panel."
+        );
+        err.code = "API_KEY_MISSING";
+        throw err;
+      }
+    } else if (provider === "openrouter") {
+      apiKey = s.openRouterApiKey;
+      if (!apiKey || !apiKey.trim()) {
+        apiKey = await window.electronAPI.getOpenRouterKey?.();
+      }
+      if (!apiKey || !apiKey.trim()) {
+        const err = new Error(
+          "OpenRouter API key not found. Please set your API key in the Control Panel."
         );
         err.code = "API_KEY_MISSING";
         throw err;
@@ -1637,7 +1766,24 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
       );
 
       const apiKey = await this.getAPIKey();
-      const optimizedAudio = audioBlob;
+      let optimizedAudio = audioBlob;
+
+      // MediaRecorder emits headerless WebM/Opus (no duration in the header).
+      // DeepInfra's Whisper (turbo especially) chokes on that for short clips —
+      // it intermittently returns an empty {"text":""} and is 2-3x slower than
+      // on a real container. Decoding to a plain 16 kHz mono WAV first makes it
+      // fast and reliable. Best-effort: if decoding fails we send the original.
+      if (provider === "deepinfra") {
+        const wav = await this._webmToWavBlob(audioBlob);
+        if (wav) {
+          logger.debug(
+            "Converted audio to WAV for DeepInfra",
+            { fromSize: audioBlob.size, toSize: wav.size },
+            "transcription"
+          );
+          optimizedAudio = wav;
+        }
+      }
 
       const formData = new FormData();
       // Determine the correct file extension based on the blob type
@@ -1781,6 +1927,39 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
         throw new Error("No text transcribed - xAI response was empty");
       }
 
+      // OpenRouter transcribes via audio-capable chat models (no /audio/transcriptions
+      // endpoint) — proxy through the main process, which transcodes to WAV and calls
+      // chat/completions with an input_audio part. See #openrouter-stt.
+      if (provider === "openrouter" && window.electronAPI?.proxyOpenRouterTranscription) {
+        const audioBuffer = await optimizedAudio.arrayBuffer();
+        const proxyData = {
+          audioBuffer,
+          model,
+          language: language !== "auto" ? language : undefined,
+          prompt: dictionaryPrompt || undefined,
+          mimeType: optimizedAudio.type || "audio/webm",
+        };
+
+        const result = await window.electronAPI.proxyOpenRouterTranscription(proxyData);
+        const proxyText = result?.text;
+
+        if (proxyText && proxyText.trim().length > 0) {
+          if (this.isDictionaryEcho(proxyText)) {
+            throw new Error("No audio detected");
+          }
+          timings.transcriptionProcessingDurationMs = Math.round(performance.now() - apiCallStart);
+          const rawText = proxyText;
+          const reasoningStart = performance.now();
+          const text = await this.processTranscription(proxyText, "openrouter");
+          timings.reasoningProcessingDurationMs = Math.round(performance.now() - reasoningStart);
+
+          const source = (await this.isReasoningAvailable()) ? "openrouter-reasoned" : "openrouter";
+          return { success: true, text, rawText, source, timings };
+        }
+
+        throw new Error("No text transcribed - OpenRouter response was empty");
+      }
+
       // Corti uses OAuth client credentials and an interaction-based REST flow — proxy through main process
       if (provider === "corti" && window.electronAPI?.proxyCortiTranscription) {
         const audioBuffer = await optimizedAudio.arrayBuffer();
@@ -1853,95 +2032,198 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
         "transcription"
       );
 
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers,
-        body: formData,
-      });
+      // DeepInfra occasionally returns HTTP 200 with an empty {"text":""} on
+      // otherwise-valid audio when its turbo model instance is cold/throttled.
+      // One quick retry catches a momentary blip; if it's still empty we don't
+      // keep hammering turbo (that added ~10s of latency) — we drop straight to
+      // the reliable large-v3 fallback below, which is nearly as fast.
+      const EMPTY_RETRIES = provider === "deepinfra" ? 1 : 0;
+      // Renderer (Chromium) fetches to DeepInfra intermittently get empty
+      // {"text":""} responses while identical requests from Node/curl always
+      // succeed — so DeepInfra requests are proxied through the main process.
+      const useDeepInfraProxy =
+        provider === "deepinfra" && !!window.electronAPI?.proxyDeepInfraTranscription;
+      const proxyAudioBuffer = useDeepInfraProxy ? await optimizedAudio.arrayBuffer() : null;
+      const proxyRequest = async (proxyModel) => {
+        const proxied = await window.electronAPI.proxyDeepInfraTranscription({
+          audioBuffer: proxyAudioBuffer,
+          model: proxyModel,
+          language,
+          prompt: dictionaryPrompt || undefined,
+          mimeType: optimizedAudio.type || "audio/wav",
+          fileName: `audio.${extension}`,
+        });
+        return {
+          ok: proxied.ok,
+          status: proxied.status,
+          statusText: "",
+          headers: { get: () => "application/json" },
+          text: async () => proxied.body,
+        };
+      };
+      let result;
+      for (let attempt = 0; ; attempt++) {
+        const response = useDeepInfraProxy
+          ? await proxyRequest(model)
+          : await fetch(endpoint, {
+              method: "POST",
+              headers,
+              body: formData,
+            });
 
-      const responseContentType = response.headers.get("content-type") || "";
+        const responseContentType = response.headers.get("content-type") || "";
 
-      logger.debug(
-        "Transcription API response received",
-        {
-          status: response.status,
-          statusText: response.statusText,
-          contentType: responseContentType,
-          ok: response.ok,
-        },
-        "transcription"
-      );
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        logger.error(
-          "Transcription API error response",
+        logger.debug(
+          "Transcription API response received",
           {
             status: response.status,
-            errorText,
-          },
-          "transcription"
-        );
-        const err = new Error(`API Error: ${response.status} ${errorText}`);
-        if (response.status === 401) err.code = "INVALID_KEY";
-        else if (response.status === 429) {
-          // The user's own provider rate-limited the request — not an OpenWhispr plan limit
-          err.code = "PROVIDER_RATE_LIMITED";
-          err.messageKey = "hooks.audioRecording.errorDescriptions.providerRateLimited";
-        } else if (response.status >= 500) err.code = "SERVER_ERROR";
-        throw err;
-      }
-
-      let result;
-      const contentType = responseContentType;
-
-      if (shouldStream && contentType.includes("text/event-stream")) {
-        logger.debug("Processing streaming response", { contentType }, "transcription");
-        const streamedText = await this.readTranscriptionStream(response);
-        result = { text: streamedText };
-        logger.debug(
-          "Streaming response parsed",
-          {
-            hasText: !!streamedText,
-            textLength: streamedText?.length,
-          },
-          "transcription"
-        );
-      } else {
-        const rawText = await response.text();
-        logger.debug(
-          "Raw API response body",
-          {
-            rawText: rawText.substring(0, 1000),
-            fullLength: rawText.length,
+            statusText: response.statusText,
+            contentType: responseContentType,
+            ok: response.ok,
+            attempt: attempt + 1,
           },
           "transcription"
         );
 
-        try {
-          result = JSON.parse(rawText);
-        } catch (parseError) {
+        if (!response.ok) {
+          const errorText = await response.text();
           logger.error(
-            "Failed to parse JSON response",
+            "Transcription API error response",
             {
-              parseError: parseError.message,
-              rawText: rawText.substring(0, 500),
+              status: response.status,
+              errorText,
             },
             "transcription"
           );
-          throw new Error(`Failed to parse API response: ${parseError.message}`);
+          const err = new Error(`API Error: ${response.status} ${errorText}`);
+          if (response.status === 401) err.code = "INVALID_KEY";
+          else if (response.status === 429) {
+            // The user's own provider rate-limited the request — not an OpenWhispr plan limit
+            err.code = "PROVIDER_RATE_LIMITED";
+            err.messageKey = "hooks.audioRecording.errorDescriptions.providerRateLimited";
+          } else if (response.status >= 500) err.code = "SERVER_ERROR";
+          throw err;
         }
 
-        logger.debug(
-          "Parsed transcription result",
-          {
-            hasText: !!result.text,
-            textLength: result.text?.length,
-            resultKeys: Object.keys(result),
-            fullResult: result,
-          },
-          "transcription"
-        );
+        const contentType = responseContentType;
+
+        if (shouldStream && contentType.includes("text/event-stream")) {
+          logger.debug("Processing streaming response", { contentType }, "transcription");
+          const streamedText = await this.readTranscriptionStream(response);
+          result = { text: streamedText };
+          logger.debug(
+            "Streaming response parsed",
+            {
+              hasText: !!streamedText,
+              textLength: streamedText?.length,
+            },
+            "transcription"
+          );
+        } else {
+          const rawText = await response.text();
+          logger.debug(
+            "Raw API response body",
+            {
+              rawText: rawText.substring(0, 1000),
+              fullLength: rawText.length,
+            },
+            "transcription"
+          );
+
+          try {
+            result = JSON.parse(rawText);
+          } catch (parseError) {
+            logger.error(
+              "Failed to parse JSON response",
+              {
+                parseError: parseError.message,
+                rawText: rawText.substring(0, 500),
+              },
+              "transcription"
+            );
+            throw new Error(`Failed to parse API response: ${parseError.message}`);
+          }
+
+          logger.debug(
+            "Parsed transcription result",
+            {
+              hasText: !!result.text,
+              textLength: result.text?.length,
+              resultKeys: Object.keys(result),
+              fullResult: result,
+            },
+            "transcription"
+          );
+        }
+
+        // Retry only the transient DeepInfra empty-text case; anything else breaks out.
+        const hasText = !!(result.text && result.text.trim().length > 0);
+        if (!hasText && attempt < EMPTY_RETRIES) {
+          const backoffMs = 400 * (attempt + 1);
+          logger.warn(
+            "Empty transcription — retrying",
+            { provider, attempt: attempt + 1, backoffMs },
+            "transcription"
+          );
+          await new Promise((r) => setTimeout(r, backoffMs));
+          continue;
+        }
+        break;
+      }
+
+      // DeepInfra's turbo model can stay empty through a whole cold window. As a
+      // last resort, retry once against the non-turbo whisper-large-v3 — a
+      // separate, usually-warm model instance — before giving up. This is what
+      // keeps DeepInfra as reliable as Groq was for the user.
+      const stillEmpty = !(result?.text && result.text.trim().length > 0);
+      if (stillEmpty && provider === "deepinfra" && model.includes("turbo")) {
+        try {
+          const fallbackModel = "openai/whisper-large-v3";
+          logger.warn(
+            "DeepInfra turbo returned empty after retries — falling back to whisper-large-v3",
+            { fallbackModel },
+            "transcription"
+          );
+          let fbResponse;
+          if (useDeepInfraProxy) {
+            fbResponse = await proxyRequest(fallbackModel);
+          } else {
+            const fallbackFd = new FormData();
+            fallbackFd.append("file", optimizedAudio, `audio.${extension}`);
+            fallbackFd.append("model", fallbackModel);
+            if (language) fallbackFd.append("language", language);
+            if (dictionaryPrompt) fallbackFd.append("prompt", dictionaryPrompt);
+            fbResponse = await fetch(endpoint, {
+              method: "POST",
+              headers,
+              body: fallbackFd,
+            });
+          }
+          if (fbResponse.ok) {
+            const fbRaw = await fbResponse.text();
+            const fbResult = JSON.parse(fbRaw);
+            if (fbResult?.text && fbResult.text.trim().length > 0) {
+              result = fbResult;
+              logger.info(
+                "DeepInfra whisper-large-v3 fallback succeeded",
+                { textLength: fbResult.text.length },
+                "transcription"
+              );
+            }
+          } else {
+            logger.warn(
+              "DeepInfra fallback request failed",
+              { status: fbResponse.status },
+              "transcription"
+            );
+          }
+        } catch (fbErr) {
+          logger.warn(
+            "DeepInfra fallback errored — surfacing original empty result",
+            { error: fbErr?.message },
+            "transcription"
+          );
+        }
       }
 
       // Check for text - handle both empty string and missing field
@@ -2050,8 +2332,14 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
         const isOpenAIModel = trimmedModel.startsWith("gpt-4o") || trimmedModel === "whisper-1";
         const isMistralModel = trimmedModel.startsWith("voxtral-");
         const isCortiModel = trimmedModel.startsWith("corti-");
+        // OpenRouter / DeepInfra model ids are namespaced (e.g. "openai/whisper-large-v3-turbo")
+        const isOpenRouterModel = trimmedModel.includes("/");
+        const isDeepInfraModel = trimmedModel.includes("/");
 
         if (provider === "groq" && isGroqModel) {
+          return trimmedModel;
+        }
+        if (provider === "deepinfra" && isDeepInfraModel) {
           return trimmedModel;
         }
         if (provider === "openai" && isOpenAIModel) {
@@ -2063,14 +2351,19 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
         if (provider === "corti" && isCortiModel) {
           return trimmedModel;
         }
+        if (provider === "openrouter" && isOpenRouterModel) {
+          return trimmedModel;
+        }
         // Model doesn't match provider - fall through to default
       }
 
       // Return provider-appropriate default
       if (provider === "groq") return "whisper-large-v3-turbo";
+      if (provider === "deepinfra") return "openai/whisper-large-v3-turbo";
       if (provider === "xai") return "grok-stt";
       if (provider === "mistral") return "voxtral-mini-latest";
       if (provider === "corti") return "corti-transcribe";
+      if (provider === "openrouter") return "openai/whisper-large-v3-turbo";
       return "gpt-4o-mini-transcribe";
     } catch (error) {
       return "gpt-4o-mini-transcribe";
@@ -2125,10 +2418,17 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
         base = currentBaseUrl.trim() || API_ENDPOINTS.TRANSCRIPTION_BASE;
       } else if (currentProvider === "groq") {
         base = API_ENDPOINTS.GROQ_BASE;
+      } else if (currentProvider === "deepinfra") {
+        // DeepInfra is OpenAI-compatible (multipart /audio/transcriptions)
+        base = API_ENDPOINTS.DEEPINFRA_BASE;
       } else if (currentProvider === "xai") {
         base = API_ENDPOINTS.XAI_BASE;
       } else if (currentProvider === "mistral") {
         base = API_ENDPOINTS.MISTRAL_BASE;
+      } else if (currentProvider === "openrouter") {
+        // OpenRouter is handled by the main-process proxy (JSON/base64); resolve its base
+        // here too so no fallback path ever sends the OpenRouter key to OpenAI.
+        base = API_ENDPOINTS.OPENROUTER_BASE;
       } else {
         // OpenAI or other standard providers
         base = API_ENDPOINTS.TRANSCRIPTION_BASE;
@@ -2761,7 +3061,11 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
 
       if (isStaleDeviceError(error) && !forceDefaultMic && !stopRequested) {
         // Pinned mic is gone (Chromium rotates IDs / device unplugged). Retry once on the default mic. See #900.
-        logger.warn("Pinned microphone unavailable, retrying streaming on default mic", {}, "streaming");
+        logger.warn(
+          "Pinned microphone unavailable, retrying streaming on default mic",
+          {},
+          "streaming"
+        );
         this.cachedMicDeviceId = null;
         await this.cleanupStreaming();
         this.isRecording = false;

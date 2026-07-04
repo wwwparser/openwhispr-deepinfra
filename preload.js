@@ -129,6 +129,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   getFileSize: (filePath) => ipcRenderer.invoke("get-file-size", filePath),
   transcribeAudioFile: (filePath, options) =>
     ipcRenderer.invoke("transcribe-audio-file", filePath, options),
+  convertAudioToWav: (audioBuffer) => ipcRenderer.invoke("convert-audio-to-wav", audioBuffer),
+  proxyDeepInfraTranscription: (data) => ipcRenderer.invoke("proxy-deepinfra-transcription", data),
   getPathForFile: (file) => webUtils.getPathForFile(file),
 
   onNoteAdded: (callback) => {
@@ -355,6 +357,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // Groq API
   getGroqKey: () => ipcRenderer.invoke("get-groq-key"),
   saveGroqKey: (key) => ipcRenderer.invoke("save-groq-key", key),
+  // DeepInfra API
+  getDeepInfraKey: () => ipcRenderer.invoke("get-deepinfra-key"),
+  saveDeepInfraKey: (key) => ipcRenderer.invoke("save-deepinfra-key", key),
 
   // xAI API
   getXaiKey: () => ipcRenderer.invoke("get-xai-key"),
@@ -365,6 +370,12 @@ contextBridge.exposeInMainWorld("electronAPI", {
   getMistralKey: () => ipcRenderer.invoke("get-mistral-key"),
   saveMistralKey: (key) => ipcRenderer.invoke("save-mistral-key", key),
   proxyMistralTranscription: (data) => ipcRenderer.invoke("proxy-mistral-transcription", data),
+
+  // OpenRouter API
+  getOpenRouterKey: () => ipcRenderer.invoke("get-openrouter-key"),
+  saveOpenRouterKey: (key) => ipcRenderer.invoke("save-openrouter-key", key),
+  proxyOpenRouterTranscription: (data) =>
+    ipcRenderer.invoke("proxy-openrouter-transcription", data),
 
   // Corti API
   getCortiClientId: () => ipcRenderer.invoke("get-corti-client-id"),

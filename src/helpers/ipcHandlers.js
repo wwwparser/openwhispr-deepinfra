@@ -72,6 +72,7 @@ function parseAttendees(raw) {
 
 const MISTRAL_TRANSCRIPTION_URL = "https://api.mistral.ai/v1/audio/transcriptions";
 
+const { transcribeWithOpenRouter, OPENROUTER_DEFAULT_MODEL } = require("./openRouterTranscription");
 const XAI_STT_URL = "https://api.x.ai/v1/stt";
 
 // xAI STT supports 25 languages; language must be in this set to enable ITN via format=true
@@ -539,9 +540,13 @@ class IPCHandlers {
       if (provider === "openai" && isOpenAI) return trimmed;
       if (provider === "mistral" && isMistral) return trimmed;
     }
+    if (provider === "openrouter" && trimmed.includes("/")) return trimmed;
+    if (provider === "deepinfra" && trimmed.includes("/")) return trimmed;
     if (provider === "groq") return "whisper-large-v3-turbo";
+    if (provider === "deepinfra") return "openai/whisper-large-v3-turbo";
     if (provider === "xai") return "grok-stt";
     if (provider === "mistral") return "voxtral-mini-latest";
+    if (provider === "openrouter") return OPENROUTER_DEFAULT_MODEL;
     return "gpt-4o-mini-transcribe";
   }
 
@@ -2559,6 +2564,82 @@ class IPCHandlers {
       return this.environmentManager.saveGroqKey(key);
     });
 
+    ipcMain.handle("get-deepinfra-key", async (event) => {
+      return this.environmentManager.getDeepInfraKey();
+    });
+
+    ipcMain.handle("save-deepinfra-key", async (event, key) => {
+      return this.environmentManager.saveDeepInfraKey(key);
+    });
+
+    // Proxy a DeepInfra transcription through the MAIN process using Node's
+    // fetch (undici). Renderer/Chromium-originated requests to DeepInfra were
+    // observed to intermittently receive empty {"text":""} responses while the
+    // exact same bytes sent via curl (and Node) transcribe fine every time, so
+    // the dictation path routes here instead of fetching from the window.
+    // Returns { ok, status, body } — parsing stays in the renderer.
+    ipcMain.handle(
+      "proxy-deepinfra-transcription",
+      async (event, { audioBuffer, model, language, prompt, mimeType, fileName }) => {
+        const apiKey = this.environmentManager.getDeepInfraKey();
+        if (!apiKey) {
+          throw new Error("DeepInfra API key not configured");
+        }
+        const formData = new FormData();
+        const blob = new Blob([Buffer.from(audioBuffer)], { type: mimeType || "audio/wav" });
+        formData.append("file", blob, fileName || "audio.wav");
+        formData.append("model", model || "openai/whisper-large-v3-turbo");
+        if (language && language !== "auto") {
+          formData.append("language", language);
+        }
+        if (prompt) {
+          formData.append("prompt", prompt);
+        }
+        const response = await fetch("https://api.deepinfra.com/v1/openai/audio/transcriptions", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${apiKey}` },
+          body: formData,
+        });
+        const body = await response.text();
+        return { ok: response.ok, status: response.status, body };
+      }
+    );
+
+    // Transcode a browser-recorded audio blob (headerless WebM/Opus, etc.) to a
+    // clean 16 kHz mono WAV via bundled FFmpeg. DeepInfra's Whisper turbo
+    // intermittently returns an empty {"text":""} on headerless WebM but is fast
+    // and reliable on a proper WAV container. Returns a Buffer (WAV bytes) or
+    // null if conversion fails so the renderer can fall back to the original.
+    ipcMain.handle("convert-audio-to-wav", async (event, audioBuffer) => {
+      const { convertToWav } = require("./ffmpegUtils");
+      const jobId = crypto.randomBytes(6).toString("hex");
+      const inPath = path.join(os.tmpdir(), `ow-conv-${jobId}.webm`);
+      const outPath = path.join(os.tmpdir(), `ow-conv-${jobId}.wav`);
+      try {
+        fs.writeFileSync(inPath, Buffer.from(audioBuffer));
+        // speechnorm boosts quiet mic recordings (-35..-40 dB mean) to normal
+        // speech level. Whisper turbo returns empty/garbled text on very quiet
+        // audio; normalized clips transcribe reliably and more accurately.
+        await convertToWav(inPath, outPath, {
+          sampleRate: 16000,
+          channels: 1,
+          audioFilter: "speechnorm=e=12.5:r=0.0001:l=1",
+        });
+        const wav = fs.readFileSync(outPath);
+        return wav.buffer.slice(wav.byteOffset, wav.byteOffset + wav.byteLength);
+      } catch (err) {
+        debugLogger.debug("convert-audio-to-wav failed", { error: err?.message });
+        return null;
+      } finally {
+        try {
+          fs.existsSync(inPath) && fs.unlinkSync(inPath);
+        } catch {}
+        try {
+          fs.existsSync(outPath) && fs.unlinkSync(outPath);
+        } catch {}
+      }
+    });
+
     ipcMain.handle("get-xai-key", async () => {
       return this.environmentManager.getXaiKey();
     });
@@ -2646,6 +2727,22 @@ class IPCHandlers {
         }
 
         return await response.json();
+      }
+    );
+
+    ipcMain.handle("get-openrouter-key", async () => {
+      return this.environmentManager.getOpenRouterKey();
+    });
+
+    ipcMain.handle("save-openrouter-key", async (event, key) => {
+      return this.environmentManager.saveOpenRouterKey(key);
+    });
+
+    ipcMain.handle(
+      "proxy-openrouter-transcription",
+      async (event, { audioBuffer, model, language, prompt, mimeType }) => {
+        const apiKey = this.environmentManager.getOpenRouterKey();
+        return transcribeWithOpenRouter({ audioBuffer, model, language, prompt, apiKey, mimeType });
       }
     );
 
@@ -3784,59 +3881,80 @@ class IPCHandlers {
           const provider = settings?.cloudTranscriptionProvider || "openai";
           const model = this._resolveByokModel(provider, settings?.cloudTranscriptionModel);
 
-          let apiKey, endpoint;
-          if (provider === "groq") {
-            apiKey = this.environmentManager.getGroqKey();
-            endpoint = "https://api.groq.com/openai/v1/audio/transcriptions";
-          } else if (provider === "xai") {
-            apiKey = this.environmentManager.getXaiKey();
-            endpoint = XAI_STT_URL;
-          } else if (provider === "mistral") {
-            apiKey = this.environmentManager.getMistralKey();
-            endpoint = MISTRAL_TRANSCRIPTION_URL;
-          } else if (provider === "custom") {
-            apiKey = this.environmentManager.getCustomTranscriptionKey();
-            const base = (settings?.cloudTranscriptionBaseUrl || "").trim();
-            endpoint = base
-              ? /\/audio\/(transcriptions|translations)$/i.test(base)
-                ? base
-                : `${base}/audio/transcriptions`
-              : "https://api.openai.com/v1/audio/transcriptions";
-          } else {
-            apiKey = this.environmentManager.getOpenAIKey();
-            endpoint = "https://api.openai.com/v1/audio/transcriptions";
-          }
-          if (!apiKey && provider !== "custom") {
-            throw new Error(`${provider} API key not configured`);
-          }
-
-          const formData = new FormData();
-          formData.append("file", new Blob([buffer], { type: "audio/webm" }), "audio.webm");
-          if (provider === "xai") {
-            // xAI STT does not accept a model field; language only when in supported set
-            if (language && XAI_STT_LANGUAGES.has(language)) {
-              formData.append("language", language);
-              formData.append("format", "true");
+          if (provider === "openrouter") {
+            const orApiKey = this.environmentManager.getOpenRouterKey();
+            const orResult = await transcribeWithOpenRouter({
+              audioBuffer: buffer,
+              model,
+              language,
+              apiKey: orApiKey,
+              mimeType: "audio/webm",
+            });
+            if (orResult?.text) {
+              result = { text: orResult.text, source: "openrouter", model };
             }
           } else {
-            formData.append("model", model);
-            if (language) formData.append("language", language);
-          }
-          const headers = {};
-          if (provider === "mistral") {
-            headers["x-api-key"] = apiKey;
-          } else if (apiKey) {
-            headers.Authorization = `Bearer ${apiKey}`;
-          }
+            let apiKey, endpoint;
+            if (provider === "groq") {
+              apiKey = this.environmentManager.getGroqKey();
+              endpoint = "https://api.groq.com/openai/v1/audio/transcriptions";
+            } else if (provider === "deepinfra") {
+              apiKey = this.environmentManager.getDeepInfraKey();
+              endpoint = "https://api.deepinfra.com/v1/openai/audio/transcriptions";
+            } else if (provider === "xai") {
+              apiKey = this.environmentManager.getXaiKey();
+              endpoint = XAI_STT_URL;
+            } else if (provider === "mistral") {
+              apiKey = this.environmentManager.getMistralKey();
+              endpoint = MISTRAL_TRANSCRIPTION_URL;
+            } else if (provider === "custom") {
+              apiKey = this.environmentManager.getCustomTranscriptionKey();
+              const base = (settings?.cloudTranscriptionBaseUrl || "").trim();
+              endpoint = base
+                ? /\/audio\/(transcriptions|translations)$/i.test(base)
+                  ? base
+                  : `${base}/audio/transcriptions`
+                : "https://api.openai.com/v1/audio/transcriptions";
+            } else {
+              apiKey = this.environmentManager.getOpenAIKey();
+              endpoint = "https://api.openai.com/v1/audio/transcriptions";
+            }
+            if (!apiKey && provider !== "custom") {
+              throw new Error(`${provider} API key not configured`);
+            }
 
-          const response = await proxyFetch(endpoint, { method: "POST", headers, body: formData });
-          if (!response.ok) {
-            const errorText = await response.text();
-            throw new Error(`${provider} API Error: ${response.status} ${errorText}`);
-          }
-          const data = await response.json();
-          if (data?.text) {
-            result = { text: data.text, source: provider, model };
+            const formData = new FormData();
+            formData.append("file", new Blob([buffer], { type: "audio/webm" }), "audio.webm");
+            if (provider === "xai") {
+              // xAI STT does not accept a model field; language only when in supported set
+              if (language && XAI_STT_LANGUAGES.has(language)) {
+                formData.append("language", language);
+                formData.append("format", "true");
+              }
+            } else {
+              formData.append("model", model);
+              if (language) formData.append("language", language);
+            }
+            const headers = {};
+            if (provider === "mistral") {
+              headers["x-api-key"] = apiKey;
+            } else if (apiKey) {
+              headers.Authorization = `Bearer ${apiKey}`;
+            }
+
+            const response = await proxyFetch(endpoint, {
+              method: "POST",
+              headers,
+              body: formData,
+            });
+            if (!response.ok) {
+              const errorText = await response.text();
+              throw new Error(`${provider} API Error: ${response.status} ${errorText}`);
+            }
+            const data = await response.json();
+            if (data?.text) {
+              result = { text: data.text, source: provider, model };
+            }
           }
         }
 
@@ -6443,6 +6561,55 @@ class IPCHandlers {
               language: language || "en",
             });
             return { success: true, text };
+          }
+
+          if (provider === "openrouter") {
+            const orKey =
+              apiKey && apiKey.trim() ? apiKey : this.environmentManager.getOpenRouterKey();
+            const { text } = await transcribeWithOpenRouter({
+              audioBuffer: fs.readFileSync(filePath),
+              model,
+              language,
+              apiKey: orKey,
+              fileName: path.basename(filePath),
+            });
+            return { success: true, text };
+          }
+
+          if (provider === "deepinfra") {
+            // DeepInfra is OpenAI-compatible multipart; endpoint is fixed so it does
+            // not depend on a configured baseUrl (which is empty for known providers).
+            const diKey =
+              apiKey && apiKey.trim() ? apiKey : this.environmentManager.getDeepInfraKey();
+            if (!diKey) throw new Error("No API key configured. Add your key in Settings.");
+            const audioBuffer = fs.readFileSync(filePath);
+            const ext = path.extname(filePath).toLowerCase().replace(".", "");
+            const contentType = AUDIO_MIME_TYPES[ext] || "audio/mpeg";
+            const fileName = path.basename(filePath);
+            const multipartFields = { model: model || "openai/whisper-large-v3-turbo" };
+            if (language && language !== "auto") multipartFields.language = language;
+            const { body, boundary } = buildMultipartBody(
+              audioBuffer,
+              fileName,
+              contentType,
+              multipartFields
+            );
+            const url = new URL("https://api.deepinfra.com/v1/openai/audio/transcriptions");
+            const data = await postMultipart(url, body, boundary, {
+              Authorization: `Bearer ${diKey}`,
+            });
+            if (data.statusCode === 401) {
+              return { success: false, error: "Invalid API key. Check your key in Settings." };
+            }
+            if (data.statusCode === 429) {
+              return { success: false, error: "Rate limit exceeded. Please try again later." };
+            }
+            if (data.statusCode !== 200) {
+              throw new Error(
+                data.data?.error?.message || data.data?.error || `API error: ${data.statusCode}`
+              );
+            }
+            return { success: true, text: data.data.text };
           }
 
           if (!apiKey) throw new Error("No API key configured. Add your key in Settings.");

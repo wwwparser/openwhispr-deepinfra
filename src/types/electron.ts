@@ -979,6 +979,10 @@ declare global {
       getGroqKey: () => Promise<string | null>;
       saveGroqKey: (key: string) => Promise<void>;
 
+      // DeepInfra API key management
+      getDeepInfraKey?: () => Promise<string | null>;
+      saveDeepInfraKey?: (key: string) => Promise<void>;
+
       // xAI API key management
       getXaiKey?: () => Promise<string | null>;
       saveXaiKey?: (key: string) => Promise<void>;
@@ -996,6 +1000,17 @@ declare global {
         model?: string;
         language?: string;
         contextBias?: string[];
+      }) => Promise<{ text: string }>;
+
+      // OpenRouter API key management
+      getOpenRouterKey?: () => Promise<string | null>;
+      saveOpenRouterKey?: (key: string) => Promise<void>;
+      proxyOpenRouterTranscription?: (data: {
+        audioBuffer: ArrayBuffer;
+        model?: string;
+        language?: string;
+        prompt?: string;
+        mimeType?: string;
       }) => Promise<{ text: string }>;
 
       // Corti credential management

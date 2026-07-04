@@ -1855,9 +1855,16 @@
         "openai_whisper_1": "Оригинальная модель Whisper",
         "groq_whisper_large_v3_turbo": "Скорость в 216 раз быстрее реального времени",
         "groq_whisper_large_v3": "Модель Large v3, быстрая и точная",
+        "deepinfra_whisper_large_v3_turbo": "Быстрое и дешёвое распознавание речи",
+        "deepinfra_whisper_large_v3": "Более точное распознавание речи",
         "mistral_voxtral_mini_latest": "Быстрая многоязычная транскрипция",
         "corti_transcribe": "Медицинская транскрипция клинического уровня",
-        "xai_grok_stt": "Высокоточное распознавание речи от xAI"
+        "xai_grok_stt": "Высокоточное распознавание речи от xAI",
+        "openrouter_whisper_large_v3_turbo": "Быстрое и дешёвое распознавание (~$0.0001/мин)",
+        "openrouter_whisper_large_v3": "Высокоточное распознавание (~$0.0015/мин)",
+        "openrouter_gemini_2_5_flash": "Мультимодальная модель, транскрипция через chat (по токенам)",
+        "openrouter_gemini_2_5_pro": "Высокоточная мультимодальная модель через chat (по токенам)",
+        "openrouter_gpt_4o_audio": "Аудиомодель OpenAI GPT-4o через chat (по токенам)"
       },
       "cloud": {
         "openai_gpt_5_2": "Сильная модель рассуждения",

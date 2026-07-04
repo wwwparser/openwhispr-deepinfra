@@ -202,8 +202,10 @@ interface TranscriptionModelPickerProps {
 const CLOUD_PROVIDER_TABS = [
   { id: "openai", name: "OpenAI" },
   { id: "groq", name: "Groq" },
+  { id: "deepinfra", name: "DeepInfra" },
   { id: "xai", name: "xAI" },
   { id: "mistral", name: "Mistral" },
+  { id: "openrouter", name: "OpenRouter" },
   { id: "corti", name: "Corti" },
   { id: "custom", name: "Custom" },
 ];
@@ -212,8 +214,10 @@ interface ProviderCredentialField {
   key:
     | "openaiApiKey"
     | "groqApiKey"
+    | "deepInfraApiKey"
     | "xaiApiKey"
     | "mistralApiKey"
+    | "openRouterApiKey"
     | "cortiClientId"
     | "cortiClientSecret"
     | "cortiEnvironment"
@@ -236,6 +240,10 @@ const PROVIDER_CREDENTIALS: Record<
     consoleUrl: "https://console.groq.com/keys",
     fields: [{ key: "groqApiKey", input: "secret" }],
   },
+  deepinfra: {
+    consoleUrl: "https://deepinfra.com/dash/api_keys",
+    fields: [{ key: "deepInfraApiKey", input: "secret" }],
+  },
   xai: {
     consoleUrl: "https://console.x.ai",
     fields: [{ key: "xaiApiKey", input: "secret" }],
@@ -243,6 +251,10 @@ const PROVIDER_CREDENTIALS: Record<
   mistral: {
     consoleUrl: "https://console.mistral.ai/api-keys",
     fields: [{ key: "mistralApiKey", input: "secret" }],
+  },
+  openrouter: {
+    consoleUrl: "https://openrouter.ai/keys",
+    fields: [{ key: "openRouterApiKey", input: "secret" }],
   },
   corti: {
     consoleUrl: "https://www.corti.ai/?utm_source=referral&utm_content=&utm_campaign=openwhispr",
@@ -334,10 +346,14 @@ export default function TranscriptionModelPicker({
   const setOpenaiApiKey = useSettingsStore((s) => s.setOpenaiApiKey);
   const groqApiKey = useSettingsStore((s) => s.groqApiKey);
   const setGroqApiKey = useSettingsStore((s) => s.setGroqApiKey);
+  const deepInfraApiKey = useSettingsStore((s) => s.deepInfraApiKey);
+  const setDeepInfraApiKey = useSettingsStore((s) => s.setDeepInfraApiKey);
   const xaiApiKey = useSettingsStore((s) => s.xaiApiKey);
   const setXaiApiKey = useSettingsStore((s) => s.setXaiApiKey);
   const mistralApiKey = useSettingsStore((s) => s.mistralApiKey);
   const setMistralApiKey = useSettingsStore((s) => s.setMistralApiKey);
+  const openRouterApiKey = useSettingsStore((s) => s.openRouterApiKey);
+  const setOpenRouterApiKey = useSettingsStore((s) => s.setOpenRouterApiKey);
   const cortiClientId = useSettingsStore((s) => s.cortiClientId);
   const setCortiClientId = useSettingsStore((s) => s.setCortiClientId);
   const cortiClientSecret = useSettingsStore((s) => s.cortiClientSecret);
@@ -708,8 +724,10 @@ export default function TranscriptionModelPicker({
   const credentialValues: Record<ProviderCredentialField["key"], string> = {
     openaiApiKey,
     groqApiKey,
+    deepInfraApiKey,
     xaiApiKey,
     mistralApiKey,
+    openRouterApiKey,
     cortiClientId,
     cortiClientSecret,
     cortiEnvironment,
@@ -718,8 +736,10 @@ export default function TranscriptionModelPicker({
   const credentialSetters: Record<ProviderCredentialField["key"], (value: string) => void> = {
     openaiApiKey: setOpenaiApiKey,
     groqApiKey: setGroqApiKey,
+    deepInfraApiKey: setDeepInfraApiKey,
     xaiApiKey: setXaiApiKey,
     mistralApiKey: setMistralApiKey,
+    openRouterApiKey: setOpenRouterApiKey,
     cortiClientId: setCortiClientId,
     cortiClientSecret: setCortiClientSecret,
     cortiEnvironment: setCortiEnvironment,
